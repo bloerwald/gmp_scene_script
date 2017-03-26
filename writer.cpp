@@ -10,100 +10,7 @@
 #include <string>
 #include <vector>
 
-struct DB2Header
-{
-  int magic;
-  int record_count;
-  int field_count;
-  int record_size;
-  int string_table_size;
-  unsigned int table_hash;
-  int build;
-  int unk1;
-  int min_id;
-  int max_id;
-  int locale;
-  int unk2;
-};
-static_assert (sizeof (DB2Header) == 0x30, "size of DB2Header");
-
-struct SceneScriptPackageRec
-{
-  int id;
-  const char* name;
-};
-struct SceneScriptPackageRecRaw
-{
-  int id;
-  unsigned int name;
-  static const unsigned int table_hash = 0xE8CB5E09;
-  SceneScriptPackageRec unraw (DB2Header const& header, const char* stringblock) const
-  {
-    SceneScriptPackageRec rec;
-    rec.id = id;
-    rec.name = name + stringblock;
-    return rec;
-  }
-};
-static_assert (sizeof (SceneScriptPackageRecRaw) == 0x8, "size of SceneScriptPackageRecRaw");
-
-struct SceneScriptPackageMemberRec
-{
-  int id;
-  int package;
-  int script;
-  int sequence;
-  int d;
-};
-struct SceneScriptPackageMemberRecRaw
-{
-  int id;
-  int package;
-  int script;
-  int sequence;
-  int d;
-  static const unsigned int table_hash = 0xE44DB71C;
-  SceneScriptPackageMemberRec unraw (DB2Header const& header, const char* stringblock) const
-  {
-    SceneScriptPackageMemberRec rec;
-    rec.id = id;
-    rec.package = package;
-    rec.script = script;
-    rec.sequence = sequence;
-    rec.d = d;
-    return rec;
-  }
-};
-static_assert (sizeof (SceneScriptPackageMemberRec) == 0x14, "size of SceneScriptPackageMemberRec");
-
-struct SceneScriptRec
-{
-  int id;
-  const char* name;
-  const char* content;
-  int previous_script;
-  int next_script;
-};
-struct SceneScriptRecRaw
-{
-  int id;
-  unsigned int name;
-  unsigned int content;
-  int previous_script;
-  int next_script;
-  static const unsigned int table_hash = 0xD4B163CC;
-  SceneScriptRec unraw (DB2Header const& header, const char* stringblock) const
-  {
-    SceneScriptRec rec;
-    rec.id = id;
-    rec.name = name + stringblock;
-    rec.content = content + stringblock;
-    rec.next_script = next_script;
-    rec.previous_script = previous_script;
-    return rec;
-  }
-};
-static_assert (sizeof (SceneScriptRecRaw) == 0x14, "size of SceneScriptRecRaw");
+#include "structures.hpp"
 
 std::vector<char> read_file (const std::string filename)
 {
@@ -136,31 +43,73 @@ void write_file (const boost::filesystem::path filename, std::vector<char> data)
   }
 }
 
-template<typename Rec>
-std::vector<char> put_records (std::vector<Rec> const& recs, std::vector<char> const& strings)
+template<typename Raw, typename Rec>
+std::vector<char> put_records (std::vector<Rec> const& recs)
 {
-  std::vector<char> data (sizeof (DB2Header) + sizeof (Rec) * recs.size());
-  data.insert (data.end(), strings.begin(), strings.end());
+  std::vector<char> data (sizeof (DB2Header) + sizeof (Raw) * recs.size());
+  uint32_t filesize (0);
 
-  DB2Header* header (reinterpret_cast<DB2Header*> (data.data()));
+  {
+    DB2Header* header (reinterpret_cast<DB2Header*> (data.data()));
 
-  header->magic = '2BDW';
-  header->record_count = recs.size();
-  header->field_count = sizeof (Rec) / 4;
-  static_assert (sizeof (Rec) % 4 == 0, "assume all-4byte-fields");
-  header->record_size = sizeof (Rec);
-  header->string_table_size = strings.size();
-  header->table_hash = Rec::table_hash;
-  header->build = 17898;
-  header->unk1 = 0;
-  header->min_id = 0;
-  header->max_id = 0;
-  header->locale = -1;
-  header->unk2 = 0;
+    header->magic = '6BDW';
+    header->record_count = recs.size();
+    header->field_count = Raw::field_count - 1;
+    static_assert (sizeof (Rec) % 4 == 0, "assume all-4byte-fields");
+    header->record_size = sizeof (Raw);
+    header->table_hash = Raw::table_hash;
+    header->layout_hash = Raw::layout_hash;
 
-  std::copy ( (char*)recs.data(), (char*) (recs.data() + recs.size())
-            , data.data() + sizeof (DB2Header)
+    header->min_id = 0x7fffffff;
+    header->max_id = 0;
+    for (auto const& rec : recs)
+    {
+      header->min_id = std::min<uint32_t> (header->min_id, rec.id);
+      header->max_id = std::max<uint32_t> (header->max_id, rec.id);
+    }
+
+    header->locale = -1;
+    header->copy_table_size = 0;
+    header->flags = 4;
+    header->id_index = 0;
+    header->total_field_count = header->field_count;
+    header->common_data_table_size = 0;
+  }
+  filesize += sizeof (DB2Header);
+
+  data.resize (data.size() + sizeof (uint32_t) * (Raw::field_count - 1));
+  std::copy ( (char const*)Raw::field_layout.data(), (char const*) (Raw::field_layout.data() + Raw::field_layout.size())
+            , data.data() + filesize
             );
+  filesize += (sizeof (uint32_t) * (Raw::field_count - 1));
+
+  std::vector<Raw> raws;
+  std::vector<uint32_t> ids;
+  std::vector<char> stringblock;
+  stringblock.emplace_back (0); stringblock.emplace_back (0);
+  for (auto const& rec : recs)
+  {
+    uint32_t id (rec.id);
+    raws.emplace_back (rec.raw (stringblock));
+    ids.emplace_back (id);
+  }
+  std::copy ( (char*)raws.data(), (char*) (raws.data() + raws.size())
+            , data.data() + filesize
+            );
+  filesize += raws.size() * sizeof (Raw);
+
+  data.insert (data.end(), stringblock.begin(), stringblock.end());
+  {
+    DB2Header* header (reinterpret_cast<DB2Header*> (data.data()));
+    header->string_table_size = stringblock.size();
+  }
+  filesize += stringblock.size();
+
+  data.resize (data.size() + ids.size() * 4);
+  std::copy ( (char*)ids.data(), (char*) (ids.data() + ids.size())
+            , data.data() + filesize
+            );
+
 
   return data;
 }
@@ -187,14 +136,14 @@ struct package_t
 int main (int argc, char** argv)
 {
   const std::string scene_script_filename
-    ("DBFilesClient/SceneScript.db2");
+    ("DBFilesClient_out/SceneScript.db2");
   const std::string scene_script_package_filename
-    ("DBFilesClient/SceneScriptPackage.db2");
+    ("DBFilesClient_out/SceneScriptPackage.db2");
   const std::string scene_script_package_member_filename
-    ("DBFilesClient/SceneScriptPackageMember.db2");
+    ("DBFilesClient_out/SceneScriptPackageMember.db2");
 
   const boost::filesystem::path input_dir (boost::filesystem::current_path() / "scene_scripts");
-  const boost::filesystem::path output_dir ("/Applications/World of Warcraft Public Test");
+  const boost::filesystem::path output_dir (boost::filesystem::current_path());//("/Applications/World of Warcraft Public Test");
   const boost::filesystem::path by_id_dir (input_dir / "by id");
 
   boost::filesystem::create_directories (output_dir / "DBFilesClient");
@@ -266,32 +215,22 @@ int main (int argc, char** argv)
     packages.emplace (std::stoi (package_dir.stem().string()), package);
   }
 
-  std::vector<SceneScriptPackageRecRaw> package_recs;
-  std::vector<char> package_strings;
-  std::vector<SceneScriptPackageMemberRecRaw> package_member_recs;
-  std::vector<char> package_member_strings;
-  std::vector<SceneScriptRecRaw> script_recs;
-  std::vector<char> script_strings;
-
-  package_strings.push_back ('\0');
-  package_member_strings.push_back ('\0');
-  script_strings.push_back ('\0');
+  std::vector<SceneScriptPackageRec> package_recs;
+  std::vector<SceneScriptPackageMemberRec> package_member_recs;
+  std::vector<SceneScriptRec> script_recs;
 
   int package_member_id (1);
   int script_id (1);
 
   for (std::pair<int, package_t> package : packages)
   {
-    SceneScriptPackageRecRaw package_rec;
+    SceneScriptPackageRec package_rec;
     package_rec.id = package.first;
-    package_rec.name = package_strings.size();
-    package_strings.insert
-      (package_strings.end(), package.second.name.begin(), package.second.name.end());
-    package_strings.push_back ('\0');
+    package_rec.name = package.second.name;
 
     for (std::pair<int, package_member_t> member : package.second.members)
     {
-      SceneScriptPackageMemberRecRaw package_member_rec;
+      SceneScriptPackageMemberRec package_member_rec;
       package_member_rec.id = package_member_id;
       package_member_rec.package = package_rec.id;
       package_member_rec.script = 0;
@@ -310,16 +249,10 @@ int main (int argc, char** argv)
           const std::string part_of_content
             (member.second.content.substr (content_part * per_content_part, per_content_part));
 
-          SceneScriptRecRaw script_rec;
+          SceneScriptRec script_rec;
           script_rec.id = script_id;
-          script_rec.name = script_strings.size();
-          script_strings.insert
-            (script_strings.end(), member.second.name.begin(), member.second.name.end());
-          script_strings.push_back ('\0');
-          script_rec.content = script_strings.size();
-          script_strings.insert
-            (script_strings.end(), part_of_content.begin(), part_of_content.end());
-          script_strings.push_back ('\0');
+          script_rec.name = member.second.name;
+          script_rec.content = part_of_content;
           script_rec.previous_script = content_part != 0 ? script_id - 1 : 0;
           script_rec.next_script = content_part != (content_parts - 1) ? script_id + 1 : 0;
           ++script_id;
@@ -335,13 +268,13 @@ int main (int argc, char** argv)
   }
 
   write_file ( output_dir / scene_script_filename
-             , put_records (script_recs, script_strings)
+             , put_records<SceneScriptRecRaw> (script_recs)
              );
   write_file ( output_dir / scene_script_package_filename
-             , put_records (package_recs, package_strings)
+             , put_records<SceneScriptPackageRecRaw> (package_recs)
              );
   write_file ( output_dir / scene_script_package_member_filename
-             , put_records (package_member_recs, package_member_strings)
+             , put_records<SceneScriptPackageMemberRecRaw> (package_member_recs)
              );
 
   return 0;

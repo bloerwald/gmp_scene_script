@@ -9,122 +9,7 @@
 #include <string>
 #include <vector>
 
-struct DB2Header
-{
-  uint32_t magic;                                               // 'WDB6' for .db2 (database)
-  uint32_t record_count;
-  uint32_t field_count;                                         // for the first time, this counts arrays as '1'; in the past, only the WCH* variants have counted arrays as 1 field
-  uint32_t record_size;
-  uint32_t string_table_size;                                   // if flags & 0x01 != 0, this field takes on a new meaning - it becomes an absolute offset to the beginning of the offset_map
-  uint32_t table_hash;
-  uint32_t layout_hash;                                         // used to be 'build', but after build 21737, this is a new hash field that changes only when the structure of the data changes
-  uint32_t min_id;
-  uint32_t max_id;
-  uint32_t locale;                                              // as seen in TextWowEnum
-  uint32_t copy_table_size;
-  uint16_t flags;                                               // in WDB3/WCH4, this field was in the WoW executable's DBCMeta; possible values are listed in Known Flag Meanings
-  uint16_t id_index;                                            // new in WDB5 (and only after build 21737), this is the index of the field containing ID values; this is ignored if flags & 0x04 != 0
-  uint32_t total_field_count;                                   // new in WDB6, includes columns only expressed in the 'common_data_table', unlike field_count
-  uint32_t common_data_table_size;                              // new in WDB6, size of new block called 'common_data_table'
-};
-
-static_assert (sizeof (DB2Header) == 0x38, "size of DB2Header");
-
-struct SceneScriptPackageRec
-{
-  int id;
-  const char* name;
-  SceneScriptPackageRec clone (int newid) const
-  {
-    auto x (*this);
-    x.id = newid;
-    return x;
-  }
-};
-struct SceneScriptPackageRecRaw
-{
-  unsigned int name;
-  static const unsigned int SceneScriptPackage_table_hash = 0xE8CB5E09;
-  static constexpr uint32_t const layout_hash = 956619678;
-  SceneScriptPackageRec unraw (DB2Header const& header, const char* stringblock, int id) const
-  {
-    SceneScriptPackageRec rec;
-    rec.id = id;
-    rec.name = name + stringblock;
-    return rec;
-  }
-};
-static_assert (sizeof (SceneScriptPackageRecRaw) == 0x4, "size of SceneScriptPackageRecRaw");
-
-struct SceneScriptPackageMemberRec
-{
-  int id;
-  int package;
-  int script;
-  int d;
-  int sequence;
-  SceneScriptPackageMemberRec clone (int newid) const
-  {
-    auto x (*this);
-    x.id = newid;
-    return x;
-  }
-};
-struct SceneScriptPackageMemberRecRaw
-{
-  uint16_t package;
-  uint16_t script;
-  uint16_t d;
-  uint16_t sequence;
-  static const unsigned int SceneScriptPackageMember_table_hash = 0xE44DB71C;
-  static constexpr uint32_t const layout_hash = 275693289;
-  SceneScriptPackageMemberRec unraw (DB2Header const& header, const char* stringblock, int id) const
-  {
-    SceneScriptPackageMemberRec rec;
-    rec.id = id;
-    rec.package = package;
-    rec.script = script;
-    rec.sequence = sequence;
-    rec.d = d;
-    return rec;
-  }
-};
-static_assert (sizeof (SceneScriptPackageMemberRecRaw) == 0x8, "size of SceneScriptPackageMemberRec");
-
-struct SceneScriptRec
-{
-  int id;
-  const char* name;
-  const char* content;
-  int previous_script;
-  int next_script;
-  SceneScriptRec clone (int newid) const
-  {
-    auto x (*this);
-    x.id = newid;
-    return x;
-  }
-};
-struct SceneScriptRecRaw
-{
-  uint32_t name;
-  uint32_t content;
-  uint16_t previous_script;
-  uint16_t next_script;
-  static const unsigned int SceneScript_table_hash = 0xD4B163CC;
-  static constexpr uint32_t const layout_hash = 1240380216;
-  SceneScriptRec unraw (DB2Header const& header, const char* stringblock, int id) const
-  {
-    SceneScriptRec rec;
-    rec.id = id;
-    rec.name = name + stringblock;
-    rec.content = content + stringblock;
-    rec.next_script = next_script;
-    rec.previous_script = previous_script;
-    return rec;
-  }
-};
-static_assert (sizeof (SceneScriptRecRaw) == 0xc, "size of SceneScriptRecRaw");
+#include "structures.hpp"
 
 std::vector<char> read_file (const std::string filename)
 {
@@ -152,7 +37,7 @@ std::vector<Rec> get_records (std::vector<char> const& data)
     (reinterpret_cast<const DB2Header*> (data.data()));
   if (header->magic != '6BDW') throw std::invalid_argument ("bad header");
   if (header->field_count != header->total_field_count) throw std::invalid_argument ("uses common data");
-  if (header->flags & ~4) throw std::invalid_argument ("unknown flags");
+  if (header->flags != 4) throw std::invalid_argument ("unknown flags");
   if (header->record_size != sizeof (RawRec)) throw std::invalid_argument ("sizeof Raw mismatch");
   if (header->layout_hash != RawRec::layout_hash) throw std::invalid_argument ("layout hash mismatch");
 
