@@ -1,3 +1,5 @@
+#include <array>
+
 struct DB2Header
 {
   uint32_t magic;                                               // 'WDB6' for .db2 (database)
